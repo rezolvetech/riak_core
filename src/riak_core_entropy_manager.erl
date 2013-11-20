@@ -605,11 +605,19 @@ start_exchange(LocalVN, RemoteVN, IndexN, Ring, State) ->
 -spec all_pairwise_exchanges(index(), riak_core_ring())
                             -> [exchange()].
 all_pairwise_exchanges(Index, Ring) ->
+<<<<<<< HEAD
     LocalIndexN = riak_core_util:responsible_preflists(Index, Ring),
     Sibs = riak_core_util:preflist_siblings(Index),
     lists:flatmap(
       fun(RemoteIdx) ->
               RemoteIndexN = riak_core_util:responsible_preflists(RemoteIdx, Ring),
+=======
+    LocalIndexN = riak_core_util2:responsible_preflists(Index, Ring),
+    Sibs = riak_core_util2:preflist_siblings(Index),
+    lists:flatmap(
+      fun(RemoteIdx) ->
+              RemoteIndexN = riak_core_util2:responsible_preflists(RemoteIdx, Ring),
+>>>>>>> 9db5ea8... Imitial AAE port from _kv to _core
               SharedIndexN = ordsets:intersection(ordsets:from_list(LocalIndexN),
                                                   ordsets:from_list(RemoteIndexN)),
               [{Index, RemoteIdx, IndexN} || IndexN <- SharedIndexN]
