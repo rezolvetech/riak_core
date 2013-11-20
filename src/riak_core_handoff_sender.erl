@@ -158,32 +158,30 @@ start_fold(TargetNode, Module, {Type, Opts}, ParentPid, SslOpts) ->
 
          Req = riak_core_util:make_fold_req(
                              fun visit_item/3,
-                             #ho_acc{
-                                      ack=0,
-                                      error=ok,
-                                      filter=Filter,
-                                      module=Module,
-                                      parent=ParentPid,
-                                      socket=Socket,
-                                      src_target={SrcPartition, TargetPartition},
-                                      stats=Stats,                                
-                                      tcp_mod=TcpMod,
-
-                                      total_bytes=0,
-                                      total_objects=0,
-                                      
-                                      use_batching=RemoteSupportsBatching,
-                                 
-                                      item_queue=[],
-                                      item_queue_length=0,
-                                      item_queue_byte_size=0,
-
-                                      acksync_threshold=AckSyncThreshold,
-
-                                      type=Type,
-                                      notsent_acc=UnsentAcc0,
-                                      notsent_fun=UnsentFun
-                                     }),
+                             #ho_acc{ack=0,
+                                     error=ok,
+                                     filter=Filter,
+                                     module=Module,
+                                     parent=ParentPid,
+                                     socket=Socket,
+                                     src_target={SrcPartition, TargetPartition},
+                                     stats=Stats,                                
+                                     tcp_mod=TcpMod,
+                                     
+                                     total_bytes=0,
+                                     total_objects=0,
+                                     
+                                     use_batching=RemoteSupportsBatching,
+                                     
+                                     item_queue=[],
+                                     item_queue_length=0,
+                                     item_queue_byte_size=0,
+                                     
+                                     acksync_threshold=AckSyncThreshold,
+                                     
+                                     type=Type,
+                                     notsent_acc=UnsentAcc0,
+                                     notsent_fun=UnsentFun}),
 
          %% IFF the vnode is using an async worker to perform the fold
          %% then sync_command will return error on vnode crash,
