@@ -298,7 +298,7 @@ handle_cast({ring_update, Ring}, State=#state{all_members=BroadcastMembers}) ->
                                        {stop, term(), #state{}}.
 handle_info(lazy_tick, State) ->
     schedule_lazy_tick(),
-    send_lazy(State),
+    _ = send_lazy(State),
     {noreply, State};
 handle_info(exchange_tick, State) ->
     schedule_exchange_tick(),
@@ -323,7 +323,7 @@ code_change(_OldVsn, State, _Extra) ->
 %%%===================================================================
 handle_broadcast(false, _MessageId, _Message, _Mod, _Round, Root, From, State) -> %% stale msg
     State1 = add_lazy(From, Root, State),
-    send({prune, Root, node()}, From),
+    _ = send({prune, Root, node()}, From),
     State1;
 handle_broadcast(true, MessageId, Message, Mod, Round, Root, From, State) -> %% valid msg
     State1 = add_eager(From, Root, State),
@@ -331,11 +331,11 @@ handle_broadcast(true, MessageId, Message, Mod, Round, Root, From, State) -> %% 
     schedule_lazy_push(MessageId, Mod, Round+1, Root, From, State2).
 
 handle_ihave(true, MessageId, Mod, Round, Root, From, State) -> %% stale i_have
-    send({ignored_i_have, MessageId, Mod, Round, Root, node()}, From),
+    _ = send({ignored_i_have, MessageId, Mod, Round, Root, node()}, From),
     State;
 handle_ihave(false, MessageId, Mod, Round, Root, From, State) -> %% valid i_have
     %% TODO: don't graft immediately
-    send({graft, MessageId, Mod, Round, Root, node()}, From),
+    _ = send({graft, MessageId, Mod, Round, Root, node()}, From),
     add_eager(From, Root, State).
 
 handle_graft(stale, MessageId, Mod, Round, Root, From, State) ->
@@ -348,7 +348,7 @@ handle_graft({ok, Message}, MessageId, Mod, Round, Root, From, State) ->
     %% instead we will allow the i_have to be sent once more and let the subsequent
     %% ignore serve as the ack.
     State1 = add_eager(From, Root, State),
-    send({broadcast, MessageId, Message, Mod, Round, Root, node()}, From),
+    _ = send({broadcast, MessageId, Message, Mod, Round, Root, node()}, From),
     State1;
 handle_graft({error, Reason}, _MessageId, Mod, _Round, _Root, _From, State) ->
     lager:error("unable to graft message from ~p. reason: ~p", [Mod, Reason]),
@@ -380,7 +380,7 @@ eager_push(MessageId, Message, Mod, State) ->
 
 eager_push(MessageId, Message, Mod, Round, Root, From, State) ->
     Peers = eager_peers(Root, From, State),
-    send({broadcast, MessageId, Message, Mod, Round, Root, node()}, Peers),
+    _ = send({broadcast, MessageId, Message, Mod, Round, Root, node()}, Peers),
     State.
 
 schedule_lazy_push(MessageId, Mod, State) ->
@@ -449,7 +449,7 @@ cancel_exchanges(Which, Exchanges) ->
     kill_exchanges(ToCancel).
 
 kill_exchanges(Exchanges) ->
-    [kill_exchange(Exchange) || Exchange <- Exchanges],
+    _ = [kill_exchange(Exchange) || Exchange <- Exchanges],
     Exchanges.
 
 kill_exchange({_, _, _, ExchangePid}) ->
@@ -609,11 +609,18 @@ init_peers(Members) ->
             Tree = riak_core_util:build_tree(1, Members, [cycles]),
             InitEagers = orddict:fetch(node(), Tree),
             InitLazys  = [lists:nth(random:uniform(N - 2), Members -- [node() | InitEagers])];
-        N ->
-            %% 5 or more members, start with gossip tree used by
+        N when N < 10 ->
+            %% 5 to 9 members, start with gossip tree used by
             %% riak_core_gossip. it will be adjusted as needed
             Tree = riak_core_util:build_tree(2, Members, [cycles]),
             InitEagers = orddict:fetch(node(), Tree),
-            InitLazys  = [lists:nth(random:uniform(N - 3), Members -- [node() | InitEagers])]
+            InitLazys  = [lists:nth(random:uniform(N - 3), Members -- [node() | InitEagers])];
+        N ->
+            %% 10 or more members, use a tree similar to riak_core_gossip
+            %% but with higher fanout (larger initial eager set size)
+            NEagers = round(math:log(N) + 1),
+            Tree = riak_core_util:build_tree(NEagers, Members, [cycles]),
+            InitEagers = orddict:fetch(node(), Tree),
+            InitLazys  = [lists:nth(random:uniform(N - (NEagers + 1)), Members -- [node() | InitEagers])]
     end,
     {InitEagers, InitLazys}.

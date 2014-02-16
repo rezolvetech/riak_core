@@ -300,7 +300,11 @@ vnode_command(_Sender, _Request, State=#state{modstate={deleted,_}}) ->
 vnode_command(Sender, Request, State=#state{mod=Mod,
                                             modstate=ModState,
                                             pool_pid=Pool}) ->
-    case Mod:handle_command(Request, Sender, ModState) of
+    case catch Mod:handle_command(Request, Sender, ModState) of
+        {'EXIT', ExitReason} ->
+            reply(Sender, {vnode_error, ExitReason}),
+            lager:error("~p command failed ~p", [Mod, ExitReason]),
+            {stop, ExitReason, State#state{modstate=ModState}};
         continue ->
             continue(State, ModState);
         {reply, Reply, NewModState} ->

@@ -2,7 +2,7 @@
 %%
 %% riak_core: Core Riak Application
 %%
-%% Copyright (c) 2007-2010 Basho Technologies, Inc.  All Rights Reserved.
+%% Copyright (c) 2007-2013 Basho Technologies, Inc.  All Rights Reserved.
 %%
 %% This file is provided to you under the Apache License,
 %% Version 2.0 (the "License"); you may not use this file
@@ -24,6 +24,8 @@
 
 -behaviour(supervisor).
 
+-include("riak_core_bg_manager.hrl").
+
 %% API
 -export([start_link/0]).
 -export([ensembles_enabled/0]).
@@ -32,7 +34,8 @@
 -export([init/1]).
 
 %% Helper macro for declaring children of supervisor
--define(CHILD(I, Type, Timeout), {I, {I, start_link, []}, permanent, Timeout, Type, [I]}).
+-define(CHILD(I, Type, Timeout, Args), {I, {I, start_link, Args}, permanent, Timeout, Type, [I]}).
+-define(CHILD(I, Type, Timeout), ?CHILD(I, Type, Timeout, [])).
 -define(CHILD(I, Type), ?CHILD(I, Type, 5000)).
 
 %% ===================================================================
@@ -56,7 +59,8 @@ init([]) ->
                    permanent, 30000, supervisor, [riak_ensemble_sup]},
 
     Children = lists:flatten(
-                 [?CHILD(riak_core_sysmon_minder, worker),
+                 [?CHILD(riak_core_bg_manager, worker),
+                  ?CHILD(riak_core_sysmon_minder, worker),
                   ?CHILD(riak_core_vnode_sup, supervisor, 305000),
                   ?CHILD(riak_core_eventhandler_sup, supervisor),
                   [?CHILD(riak_core_dist_mon, worker) || DistMonEnabled],

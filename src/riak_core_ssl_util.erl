@@ -31,7 +31,9 @@
          upgrade_client_to_ssl/2,
          upgrade_server_to_ssl/2,
          get_common_name/1,
-         load_certs/1
+         load_certs/1,
+         parse_ciphers/1,
+         print_ciphers/1
         ]).
 
 -ifdef(TEST).
@@ -109,8 +111,8 @@ validate_ssl_config([{cacertdir, CACertDir}|Rest], Acc) ->
         Certs when is_list(Certs) ->
             validate_ssl_config(Rest, [{cacerts, Certs}|Acc])
     end;
-validate_ssl_config([_|Rest], Acc) ->
-    validate_ssl_config(Rest, Acc).
+validate_ssl_config([E|Rest], Acc) ->
+    validate_ssl_config(Rest, [E|Acc]).
 
 upgrade_client_to_ssl(Socket, App) ->
     case maybe_use_ssl(App) of
@@ -286,6 +288,29 @@ posix_error(Error) ->
         "unknown POSIX error" -> lists:flatten(io_lib:format("~p", [Error]));
         Message -> Message
     end.
+
+%% Takes a list of openssl style cipher names and converts them to erlang
+%% cipher names. Returns a 2-tuple of the supported and unknown/unsupported
+%% suites.
+parse_ciphers(CipherList) ->
+    {Good, Bad} = lists:foldl(fun(Cipher, {Acc, Unknown}) ->
+                        try ssl_cipher:openssl_suite(Cipher) of
+                            C ->
+                                {[C|Acc], Unknown}
+                        catch
+                            _:_ ->
+                                %% function will function_clause on
+                                %% unsupported/unknown ciphers
+                                {Acc, [Cipher|Unknown]}
+                        end
+                end, {[], []},  string:tokens(CipherList, ":")),
+    {lists:reverse(Good), lists:reverse(Bad)}.
+
+%% print the OpenSSL name for ciphers
+print_ciphers(CipherList) ->
+    string:join([ssl_cipher:openssl_suite_name(Cipher) || Cipher <-
+                                                          CipherList], ":").
+
 
 %% ===================================================================
 %% EUnit tests
