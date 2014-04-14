@@ -23,12 +23,22 @@
 %% @doc Change net_kernel's ticktime on-the-fly.
 
 -module(riak_core_net_ticktime).
--export([start_set_net_ticktime_daemon/2,
+-export([enable/0,
+         start_set_net_ticktime_daemon/2,
          stop_set_net_ticktime_daemon/1]).
 
 -define(REGNAME, net_kernel_net_ticktime_change_daemon).
 
+-spec enable() -> ok.
+enable() ->
+    riak_core_capability:register({riak_core, net_ticktime},
+                                  [true, false],
+                                  false).
+
 start_set_net_ticktime_daemon(Node, Time) ->
+    start_set_net_ticktime_daemon(Node, Time, net_ticktime_active()).
+
+start_set_net_ticktime_daemon(Node, Time, true) ->
     EbinDir = filename:dirname(code:which(?MODULE)),
     try
         Dirs = rpc:call(Node, code, get_path, []),
@@ -52,14 +62,23 @@ start_set_net_ticktime_daemon(Node, Time) ->
                             lager:info("start_set_net_ticktime_daemon: started "
                                        "changing net_ticktime on ~p to ~p\n",
                                  [Node, Time]),
-                            random:seed(os:timestamp()),
+                            _ = random:seed(os:timestamp()),
                             set_net_ticktime_daemon_loop(Time, 1)
                         catch _:_ ->
                                 ok
                         end
-                end).
+                end);
+start_set_net_ticktime_daemon(Node, _Time, false) ->
+    lager:info("Not starting tick daemon on ~p. Capability unsupported. "
+               "Some nodes in the Riak cluster do not have ~p loaded\n",
+               [Node, ?MODULE]),
+    ok.
 
 stop_set_net_ticktime_daemon(Node) ->
+    Capability = riak_core_capability:get({riak_core, net_ticktime}),
+    stop_set_net_ticktime_daemon(Node, Capability).
+
+stop_set_net_ticktime_daemon(Node, true) ->
     try
         case rpc:call(Node, erlang, whereis, [?REGNAME]) of
             Pid when is_pid(Pid) ->
@@ -73,11 +92,14 @@ stop_set_net_ticktime_daemon(Node) ->
     catch _:_ ->
             %% Network problems or timeouts, we don't try too hard
             error
-    end.
+    end;
+stop_set_net_ticktime_daemon(Node, false) ->
+    lager:info("Not stopping tick daemon on ~p. Capability unsupported\n", [Node]),
+    ok.
 
 async_start_set_net_ticktime_daemons(Time, Nodes) ->
     Pids = [spawn(fun() ->
-                          start_set_net_ticktime_daemon(Node, Time)
+                          start_set_net_ticktime_daemon(Node, Time, true)
                   end) || Node <- Nodes],
     spawn(fun() ->
                   %% If a daemon cannot finish in 5 seconds, no worries.
@@ -100,10 +122,12 @@ set_net_ticktime_daemon_loop(Time, Count) ->
             %% connected to us.  Force them to change their tick time,
             %% in case they're using something different.  And pick up
             %% any regular nodes that have connected since we started.
-            if Count rem 5 == 0 ->
+            if
+                Count rem 5 == 0 ->
                     async_start_set_net_ticktime_daemons(
-                      Time, da_nodes(nodes(connected)));
-               true ->
+                      Time, da_nodes(nodes(connected))),
+                    ok;
+                true ->
                     ok
             end,
             set_net_ticktime_daemon_loop(Time, Count + 1)
@@ -120,3 +144,11 @@ set_net_ticktime(Time) ->
             A
     end.
 
+-spec net_ticktime_active() -> boolean().
+net_ticktime_active() ->
+    case catch riak_core_capability:get({riak_core, net_ticktime}) of
+        true ->
+            true;
+        _ ->
+            false
+    end.

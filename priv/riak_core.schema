@@ -396,25 +396,30 @@
 
 %% @doc Default location of ringstate
 {mapping, "ring.state_dir", "riak_core.ring_state_dir", [
-  {default, "{{ring_state_dir}}"}
+  {datatype, directory},
+  {default, "$(platform_data_dir)/ring"},
+  hidden
 ]}.
 
 %% @doc Default cert location for https can be overridden
 %% with the ssl config variable, for example:
 {mapping, "ssl.certfile", "riak_core.ssl.certfile", [
-  {commented, "{{platform_etc_dir}}/cert.pem"}
+  {datatype, file},
+  {commented, "$(platform_etc_dir)/cert.pem"}
 ]}.
 
 %% @doc Default key location for https can be overridden
 %% with the ssl config variable, for example:
 {mapping, "ssl.keyfile", "riak_core.ssl.keyfile", [
-  {commented, "{{platform_etc_dir}}/key.pem"}
+  {datatype, file},
+  {commented, "$(platform_etc_dir)/key.pem"}
 ]}.
 
 %% @doc Default signing authority location for https can be overridden
 %% with the ssl config variable, for example:
 {mapping, "ssl.cacertfile", "riak_core.ssl.cacertfile", [
-  {commented, "{{platform_etc_dir}}/cacertfile.pem"}
+  {datatype, file},
+  {commented, "$(platform_etc_dir)/cacertfile.pem"}
 ]}.
 
 %% @doc handoff.port is the TCP port that Riak uses for
@@ -487,4 +492,16 @@
   {datatype, {enum, [true, false]}},
   {default, false},
   {commented, true}
+]}.
+
+%% @doc Whether to enable the background manager globally. When
+%% enabled, participating Riak subsystems will coordinate access to
+%% shared resources. This will help to prevent system response
+%% degradation under times of heavy load from multiple background
+%% tasks. Specific subsystems may also have their own controls over
+%% use of the background manager.
+{mapping, "background_manager", "riak_core.use_background_manager", [
+    {datatype, flag},
+    {default, on},
+    hidden
 ]}.

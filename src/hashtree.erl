@@ -178,7 +178,7 @@
                 ref            :: term(),
                 path           :: string(),
                 itr            :: term(),
-                write_buffer   :: [{binary(), binary()}],
+                write_buffer   :: [{put, binary(), binary()} | {delete, binary()}],
                 write_buffer_count :: integer(),
                 dirty_segments :: array()
                }).
@@ -189,7 +189,8 @@
                     remaining_segments :: ['*' | integer()],
                     acc_fun            :: fun(([{binary(),binary()}]) -> any()),
                     segment_acc        :: [{binary(), binary()}],
-                    final_acc          :: [{integer(), any()}]
+                    final_acc          :: [{integer(), any()}],
+                    prefetch=false     :: boolean()
                    }).
 
 -opaque hashtree() :: #state{}.
@@ -499,13 +500,27 @@ new_segment_store(Opts, State) ->
                       SegmentPath
               end,
 
-    filelib:ensure_dir(DataDir),
-    Keys = [aae_total_leveldb_mem_percent, aae_total_leveldb_mem,
-            aae_limited_developer_mem, aae_use_bloomfilter, aae_sst_block_size,
-            aae_block_restart_interval, aae_verify_compaction,
-            aae_eleveldb_threads, aae_fadvise_willneed, aae_delete_threshold],
-    Options = open_opts(Keys, [{create_if_missing, true}]),
+    DefaultWriteBufferMin = 4 * 1024 * 1024,
+    DefaultWriteBufferMax = 14 * 1024 * 1024,
+    ConfigVars = get_env(anti_entropy_leveldb_opts,
+                         [{write_buffer_size_min, DefaultWriteBufferMin},
+                          {write_buffer_size_max, DefaultWriteBufferMax}]),
+    Config = orddict:from_list(ConfigVars),
 
+    %% Use a variable write buffer size to prevent against all buffers being
+    %% flushed to disk at once when under a heavy uniform load.
+    WriteBufferMin = proplists:get_value(write_buffer_size_min, Config, DefaultWriteBufferMin),
+    WriteBufferMax = proplists:get_value(write_buffer_size_max, Config, DefaultWriteBufferMax),
+    {Offset, _} = random:uniform_s(1 + WriteBufferMax - WriteBufferMin, now()),
+    WriteBufferSize = WriteBufferMin + Offset,
+    Config2 = orddict:store(write_buffer_size, WriteBufferSize, Config),
+    Config3 = orddict:erase(write_buffer_size_min, Config2),
+    Config4 = orddict:erase(write_buffer_size_max, Config3),
+    Config5 = orddict:store(is_internal_db, true, Config4),
+    Config6 = orddict:store(use_bloomfilter, true, Config5),
+    Options = orddict:store(create_if_missing, true, Config6),
+
+    ok = filelib:ensure_dir(DataDir),
     {ok, Ref} = eleveldb:open(DataDir, Options),
     State#state{ref=Ref, path=DataDir}.
 
@@ -617,7 +632,7 @@ get_disk_bucket(Level, Bucket, #state{id=Id, ref=Ref}) ->
 set_disk_bucket(Level, Bucket, Val, State=#state{id=Id, ref=Ref}) ->
     HKey = encode_bucket(Id, Level, Bucket),
     Bin = term_to_binary(Val),
-    eleveldb:put(Ref, HKey, Bin, []),
+    ok = eleveldb:put(Ref, HKey, Bin, []),
     State.
 
 -spec encode_id(binary() | non_neg_integer()) -> tree_id_bin().
@@ -704,6 +719,7 @@ iterator_move(undefined, _Seek) ->
     {error, invalid_iterator};
 iterator_move(Itr, Seek) ->
     try
+
         eleveldb:iterator_move(Itr, Seek)
     catch
         _:badarg ->
@@ -728,38 +744,63 @@ iterate({ok, K, V}, IS=#itr_state{itr=Itr,
                   _ ->
                       CurSeg
               end,
-    case {SegId, Seg, Segments} of
-        {bad, -1, _} ->
+    case {SegId, Seg, Segments, IS#itr_state.prefetch} of
+        {bad, -1, _, _} ->
             %% Non-segment encountered, end traversal
             IS;
-        {Id, Segment, _} ->
+        {Id, Segment, _, _} ->
             %% Still reading existing segment
             IS2 = IS#itr_state{current_segment=Segment,
-                               segment_acc=[{K,V} | Acc]},
-            iterate(iterator_move(Itr, next), IS2);
-        {Id, _, [Seg|Remaining]} ->
+                               segment_acc=[{K,V} | Acc],
+                               prefetch=true},
+            iterate(iterator_move(Itr, prefetch), IS2);
+        {Id, _, [Seg|Remaining], _} ->
             %% Pointing at next segment we are interested in
             IS2 = IS#itr_state{current_segment=Seg,
                                remaining_segments=Remaining,
                                segment_acc=[{K,V}],
-                               final_acc=[{Segment, F(Acc)} | FinalAcc]},
-            iterate(iterator_move(Itr, next), IS2);
-        {Id, _, ['*']} ->
+                               final_acc=[{Segment, F(Acc)} | FinalAcc],
+                               prefetch=true},
+            iterate(iterator_move(Itr, prefetch), IS2);
+        {Id, _, ['*'], _} ->
             %% Pointing at next segment we are interested in
             IS2 = IS#itr_state{current_segment=Seg,
                                remaining_segments=['*'],
                                segment_acc=[{K,V}],
-                               final_acc=[{Segment, F(Acc)} | FinalAcc]},
-            iterate(iterator_move(Itr, next), IS2);
-        {Id, _, [NextSeg|Remaining]} ->
+                               final_acc=[{Segment, F(Acc)} | FinalAcc],
+                               prefetch=true},
+            iterate(iterator_move(Itr, prefetch), IS2);
+        {Id, NextSeg, [NextSeg|Remaining], _} ->
+            %% A previous prefetch_stop left us at the start of the
+            %% next interesting segment.
+            IS2 = IS#itr_state{current_segment=NextSeg,
+                               remaining_segments=Remaining,
+                               segment_acc=[{K,V}],
+                               prefetch=true},
+            iterate(iterator_move(Itr, prefetch), IS2);
+        {Id, _, [_NextSeg | _Remaining], true} ->
+            %% Pointing at uninteresting segment, but need to halt the
+            %% prefetch to ensure the interator can be reused
+            IS2 = IS#itr_state{segment_acc=[],
+                               final_acc=[{Segment, F(Acc)} | FinalAcc],
+                               prefetch=false},
+            iterate(iterator_move(Itr, prefetch_stop), IS2);
+        {Id, _, [NextSeg | Remaining], false} ->
             %% Pointing at uninteresting segment, seek to next interesting one
+            Seek = encode(Id, NextSeg, <<>>),
             IS2 = IS#itr_state{current_segment=NextSeg,
                                remaining_segments=Remaining,
                                segment_acc=[],
                                final_acc=[{Segment, F(Acc)} | FinalAcc]},
-            Seek = encode(Id, NextSeg, <<>>),
             iterate(iterator_move(Itr, Seek), IS2);
-        _ ->
+        {_, _, _, true} ->
+            %% Done with traversal, but need to stop the prefetch to
+            %% ensure the iterator can be reused. The next operation
+            %% with this iterator is a seek so no need to be concerned
+            %% with the data returned here.
+            _ = iterator_move(Itr, prefetch_stop),
+            IS#itr_state{prefetch=false};
+        {_, _, _, false} ->
             %% Done with traversal
             IS
     end.
@@ -866,17 +907,6 @@ expand(V, N, Acc) ->
                 Acc
         end,
     expand(V bsr 1, N+1, Acc2).
-
-open_opts([K | Ks], Opts) ->
-    case application:get_env(riak_core, K) of
-        {ok, V} ->
-            open_opts(Ks, [{K, V} | Opts]);
-        _ ->
-            open_opts(Ks, Opts)
-    end;
-
-open_opts([], Opts) ->
-    Opts.
 
 %%%===================================================================
 %%% Experiments

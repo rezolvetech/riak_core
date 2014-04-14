@@ -21,13 +21,23 @@
 -module(riak_core_console_table).
 
 %% API
--export([print/2,
+-export([print/2, print/3,
          create_table/2]).
 
 -spec print(list(), list()) -> ok.
+print(_Spec, []) ->
+    ok;
 print(Spec, Rows) ->
     Table = create_table(Spec, Rows),
-    io:format("~s", [Table]).
+    io:format("~n~ts~n", [Table]).
+
+
+-spec print(list(), list(), list()) -> ok.
+print(_Hdr, _Spec, []) ->
+    ok;
+print(Header, Spec, Rows) ->
+    Table = create_table(Spec, Rows),
+    io:format("~ts~n~n~ts~n", [Header, Table]).
 
 -spec create_table(list(), list()) -> iolist().
 create_table(Spec, Rows) ->
@@ -57,7 +67,7 @@ get_row_length(Spec, Rows) ->
     Res = lists:foldl(fun({_Name, MinSize}, Total) ->
                         Longest = find_longest_field(Rows, length(Total)+1),
                         Size = erlang:max(MinSize, Longest),
-                        [Size | Total] 
+                        [Size | Total]
                 end, [], Spec),
     lists:reverse(Res).
 
@@ -84,12 +94,12 @@ align(undefined, Size) ->
 align(Str, Size) when is_integer(Str) ->
     align(integer_to_list(Str), Size);
 align(Str, Size) when is_binary(Str) ->
-    align(binary_to_list(Str), Size);
+    align(unicode:characters_to_list(Str, utf8), Size);
 align(Str, Size) when is_atom(Str) ->
     align(atom_to_list(Str), Size);
-%align(Str, Size) when is_list(Str), length(Str) > Size -> 
+%align(Str, Size) when is_list(Str), length(Str) > Size ->
     %Truncated = lists:sublist(Str, Size),
-    %Truncated ++ " |"; 
+    %Truncated ++ " |";
 %align(Str, Size) when is_list(Str), length(Str) =:= Size ->
     %Str ++ " |";
 align(Str, Size) when is_list(Str) ->
@@ -121,7 +131,7 @@ find_longest_field(Rows, ColumnNo) ->
 field_length(Field) when is_atom(Field) ->
     field_length(atom_to_list(Field));
 field_length(Field) when is_binary(Field) ->
-    field_length(binary_to_list(Field));
+    field_length(unicode:characters_to_list(Field, utf8));
 field_length(Field) when is_list(Field) ->
     Lines = string:tokens(lists:flatten(Field), "\n"),
     lists:foldl(fun(Line, Longest) ->
@@ -134,7 +144,7 @@ field_length(Field) ->
 expand_field(Field) when is_atom(Field) ->
     expand_field(atom_to_list(Field));
 expand_field(Field) when is_binary(Field) ->
-    expand_field(binary_to_list(Field));
+    expand_field(unicode:characters_to_list(Field, utf8));
 expand_field(Field) when is_list(Field) ->
     string:tokens(lists:flatten(Field), "\n");
 expand_field(Field) ->
@@ -153,4 +163,3 @@ pad_field(Field, MaxHeight) when length(Field) < MaxHeight ->
     Field ++ ["" || _ <- lists:seq(1, MaxHeight - length(Field))];
 pad_field(Field, _MaxHeight) ->
     Field.
-
