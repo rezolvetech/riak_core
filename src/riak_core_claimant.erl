@@ -634,6 +634,7 @@ schedule_tick() ->
     erlang:send_after(Tick, ?MODULE, tick).
 
 tick(State=#state{last_ring_id=LastID}) ->
+    maybe_enable_ensembles(),
     case riak_core_ring_manager:get_ring_id() of
         LastID ->
             schedule_tick(),
@@ -746,6 +747,90 @@ type_claimant(Props) ->
         false -> undefined
     end.
 
+%% The consensus subsystem must be enabled by exactly one node in a cluster
+%% via a call to riak_ensemble_manager:enable(). We accomplished this by
+%% having the claimant be that one node. Likewise, we require that the cluster
+%% includes at least three nodes before we enable consensus. This prevents the
+%% claimant in a 1-node cluster from enabling consensus before being joined to
+%% another cluster.
+maybe_enable_ensembles() ->
+    Desired = riak_core_sup:ensembles_enabled(),
+    Enabled = riak_ensemble_manager:enabled(),
+    case Enabled of
+        Desired ->
+            ok;
+        _ ->
+            {ok, Ring} = riak_core_ring_manager:get_raw_ring(),
+            IsReady = riak_core_ring:ring_ready(Ring),
+            IsClaimant = (riak_core_ring:claimant(Ring) == node()),
+            EnoughNodes = (length(riak_core_ring:ready_members(Ring)) >= 3),
+            case IsReady and IsClaimant and EnoughNodes of
+                true ->
+                    enable_ensembles(Ring);
+                false ->
+                    ok
+            end
+    end.
+
+%% We need to avoid a race where the current claimant enables consensus right
+%% before going offline and being replaced by a new claimant. It could be
+%% argued that this corner case is not important since changing the claimant
+%% requires the user manually marking the current claimant as down. But, it's
+%% better to be safe and handle things correctly.
+%%
+%% To solve this issue, the claimant first marks itself as the "ensemble
+%% singleton" in the ring metadata. Once the ring has converged, the claimant
+%% see that it previously marked itself as the singleton and will proceed to
+%% enable the consensus subsystem. If the claimant goes offline after marking
+%% itself the singleton, but before enabling consensus, then future claimants
+%% will be unable to enable consensus. Consensus will be enabled once the
+%% previous claimant comes back online.
+%%
+enable_ensembles(Ring) ->
+    Node = node(),
+    case ensemble_singleton(Ring) of
+        undefined ->
+            become_ensemble_singleton();
+        Node ->
+            %% Ring update is required after enabling consensus to ensure
+            %% that ensembles are properly bootstrapped.
+            riak_ensemble_manager:enable(),
+            riak_core_ring_manager:force_update(),
+            lager:info("Activated consensus subsystem for cluster");
+        _ ->
+            ok
+    end.
+
+ensemble_singleton(Ring) ->
+    case riak_core_ring:get_meta('$ensemble_singleton', Ring) of
+        undefined ->
+            undefined;
+        {ok, Node} ->
+            Members = riak_core_ring:all_members(Ring),
+            case lists:member(Node, Members) of
+                true ->
+                    Node;
+                false ->
+                    undefined
+            end
+    end.
+
+become_ensemble_singleton() ->
+    _ = riak_core_ring_manager:ring_trans(fun become_ensemble_singleton_trans/2,
+                                          undefined),
+    ok.
+
+become_ensemble_singleton_trans(Ring, _) ->
+    IsClaimant = (riak_core_ring:claimant(Ring) == node()),
+    NoSingleton = (ensemble_singleton(Ring) =:= undefined),
+    case IsClaimant and NoSingleton of
+        true ->
+            Ring2 = riak_core_ring:update_meta('$ensemble_singleton', node(), Ring),
+            {new_ring, Ring2};
+        false ->
+            ignore
+    end.
+
 maybe_bootstrap_root_ensemble(Ring) ->
     IsEnabled = riak_ensemble_manager:enabled(),
     IsClaimant = (riak_core_ring:claimant(Ring) == node()),
@@ -763,19 +848,24 @@ bootstrap_root_ensemble(Ring) ->
 
 bootstrap_members(Ring) ->
     Name = riak_core_ring:cluster_name(Ring),
-    Members = riak_core_ring:all_members(Ring),
+    Members = riak_core_ring:ready_members(Ring),
     RootMembers = riak_ensemble_manager:get_members(root),
     Known = riak_ensemble_manager:cluster(),
     Need = Members -- Known,
-    L = [riak_ensemble_manager:join(node(), Member) || Member <- Need,
-                                                       Member =/= node()],
-    Failed = [Result || Result <- L,
-                        Result =/= ok],
-    (Failed =:= []) orelse reset_ring_id(self()),
+    L = [riak_core_util:proxy_spawn(
+            fun() -> riak_ensemble_manager:join(node(), Member) end
+        ) || Member <- Need, Member =/= node()],
+    _ = maybe_reset_ring_id(L),
 
     RootNodes = [Node || {_, Node} <- RootMembers],
     RootAdd = Members -- RootNodes,
     RootDel = RootNodes -- Members,
+
+    Res = [riak_core_util:proxy_spawn(
+              fun() -> riak_ensemble_manager:remove(node(), N) end
+           ) || N <- RootDel, N =/= node()],
+    _ = maybe_reset_ring_id(Res),
+
     Changes =
         [{add, {Name, Node}} || Node <- RootAdd] ++
         [{del, {Name, Node}} || Node <- RootDel],
@@ -799,6 +889,10 @@ async_bootstrap_members(Claimant, Changes) ->
             reset_ring_id(Claimant),
             ok
     end.
+
+maybe_reset_ring_id(Results) ->
+    Failed = [R || R <- Results, R =/= ok],
+    (Failed =:= []) orelse reset_ring_id(self()).
 
 %% Reset last_ring_id, ensuring future tick re-examines the ring even if the
 %% ring has not changed.
@@ -1041,7 +1135,7 @@ inform_removed_nodes(Node, OldRing, NewRing) ->
     Changed = ordsets:intersection(ordsets:from_list(Exiting),
                                    ordsets:from_list(Invalid)),
     %% Tell exiting node to shutdown.
-    _ = [riak_core_ring_manager:refresh_ring(ExitingNode, CName) || 
+    _ = [riak_core_ring_manager:refresh_ring(ExitingNode, CName) ||
             ExitingNode <- Changed],
     ok.
 
@@ -1114,14 +1208,22 @@ maybe_remove_exiting(Node, CState) ->
         Node ->
             %% Change exiting nodes to invalid, skipping this node.
             Exiting = riak_core_ring:members(CState, [exiting]) -- [Node],
-            Changed = (Exiting /= []),
+            RootMembers = riak_ensemble_manager:get_members(root),
             CState2 =
                 lists:foldl(fun(ENode, CState0) ->
-                                    ClearedCS =
-                                        riak_core_ring:clear_member_meta(Node, CState0, ENode),
-                                    riak_core_ring:set_member(Node, ClearedCS, ENode,
-                                                              invalid, same_vclock)
+                              L = [N || {_, N} <- RootMembers, N =:= ENode],
+                              case L of
+                                  [] ->
+                                      ClearedCS =
+                                          riak_core_ring:clear_member_meta(Node, CState0, ENode),
+                                      riak_core_ring:set_member(Node, ClearedCS, ENode,
+                                                                invalid, same_vclock);
+                                  _ ->
+                                      reset_ring_id(self()),
+                                      CState0
+                              end
                             end, CState, Exiting),
+            Changed = (CState2 /= CState),
             {Changed, CState2};
         _ ->
             {false, CState}
@@ -1204,7 +1306,7 @@ update_ring(CNode, CState, Replacing, Seed, Log, false) ->
     Next3 = rebalance_ring(CNode, CState4),
     Log(debug,{"Pending ownership transfers: ~b~n",
                [length(riak_core_ring:pending_changes(CState4))]}),
-    
+
     %% Remove transfers to/from down nodes
     Next4 = handle_down_nodes(CState4, Next3),
 

@@ -494,7 +494,7 @@ new_segment_store(Opts, State) ->
     DataDir = case proplists:get_value(segment_path, Opts) of
                   undefined ->
                       Root = "/tmp/anti/level",
-                      <<P:128/integer>> = md5(term_to_binary(erlang:now())),
+                      <<P:128/integer>> = md5(term_to_binary({erlang:now(), make_ref()})),
                       filename:join(Root, integer_to_list(P));
                   SegmentPath ->
                       SegmentPath
@@ -1122,24 +1122,34 @@ delta_test() ->
 
 -ifdef(EQC).
 sha_test_() ->
-    {timeout, 60,
-     fun() ->
-             ?assert(eqc:quickcheck(eqc:testing_time(4, prop_sha())))
-     end
-    }.
+    {spawn,
+     {timeout, 120,
+      fun() ->
+              ?assert(eqc:quickcheck(eqc:testing_time(4, prop_sha())))
+      end
+     }}.
 
 prop_sha() ->
-    ?FORALL(Size, choose(256, 1024*1024),
-            ?FORALL(Chunk, choose(1, Size),
+    %% NOTE: Generating 1MB (1024 * 1024) size binaries is incredibly slow
+    %% with EQC and was using over 2GB of memory
+    ?FORALL({Size, NumChunks}, {choose(1, 1024), choose(1, 16)},
                     ?FORALL(Bin, binary(Size),
-                            sha(Chunk, Bin) =:= esha(Bin)))).
+                            begin
+                                %% we need at least one chunk,
+                                %% and then we divide the binary size
+                                %% into the number of chunks (as a natural
+                                %% number)
+                                ChunkSize = max(1, (Size div NumChunks)),
+                                sha(ChunkSize, Bin) =:= esha(Bin)
+                            end)).
 
 eqc_test_() ->
-    {timeout, 5,
-     fun() ->
-             ?assert(eqc:quickcheck(eqc:testing_time(4, prop_correct())))
-     end
-    }.
+    {spawn,
+     {timeout, 120,
+      fun() ->
+              ?assert(eqc:quickcheck(eqc:testing_time(4, prop_correct())))
+      end
+     }}.
 
 objects() ->
     ?SIZED(Size, objects(Size+3)).

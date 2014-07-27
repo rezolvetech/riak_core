@@ -38,6 +38,8 @@
          start_app_deps/1,
          build_tree/3,
          orddict_delta/2,
+         safe_rpc/4,
+         safe_rpc/5,
          rpc_every_member/4,
          rpc_every_member_ann/4,
          pmap/2,
@@ -62,7 +64,9 @@
          responsible_preflists/1,
          responsible_preflists/2,
          get_index_n/1,
-         preflist_siblings/1
+         preflist_siblings/1,
+         proxy_spawn/1,
+         proxy/2
         ]).
 
 -include("riak_core_vnode.hrl").
@@ -92,7 +96,7 @@
 %%      number of seconds from year 0 to now, universal time, in
 %%      the gregorian calendar.
 
-moment() -> 
+moment() ->
     {Mega, Sec, _Micro} = os:timestamp(),
     (Mega * 1000000) + Sec + ?SEC_TO_EPOCH.
 
@@ -227,8 +231,8 @@ unique_id_62() ->
 %%      and code:load_file/1 on each node.
 reload_all(Module) ->
     {ok, Ring} = riak_core_ring_manager:get_my_ring(),
-    [{rpc:call(Node, code, purge, [Module]),
-     rpc:call(Node, code, load_file, [Module])} ||
+    [{safe_rpc(Node, code, purge, [Module]),
+     safe_rpc(Node, code, load_file, [Module])} ||
         Node <- riak_core_ring:all_members(Ring)].
 
 %% @spec mkclientid(RemoteNode :: term()) -> ClientID :: list()
@@ -244,8 +248,8 @@ mkclientid(RemoteNode) ->
 chash_key({Bucket,_Key}=BKey) ->
     BucketProps = riak_core_bucket:get_bucket(Bucket),
     chash_key(BKey, BucketProps).
-    
-%% @spec chash_key(BKey :: riak_object:bkey(), [{atom(), any()}]) -> 
+
+%% @spec chash_key(BKey :: riak_object:bkey(), [{atom(), any()}]) ->
 %%          chash:index()
 %% @doc Create a binary used for determining replica placement.
 chash_key({Bucket,Key}, BucketProps) ->
@@ -292,7 +296,7 @@ start_app_deps(App) ->
     {ok, DepApps} = application:get_key(App, applications),
     _ = [ensure_started(A) || A <- DepApps],
     ok.
-    
+
 
 %% @spec ensure_started(Application :: atom()) -> ok
 %% @doc Start the named application if not already started.
@@ -306,19 +310,22 @@ ensure_started(App) ->
 
 %% @doc Invoke function `F' over each element of list `L' in parallel,
 %%      returning the results in the same order as the input list.
--spec pmap(function(), [node()]) -> [any()].
+-spec pmap(F, L1) -> L2 when
+      F :: fun((A) -> B),
+      L1 :: [A],
+      L2 :: [B].
 pmap(F, L) ->
     Parent = self(),
     lists:foldl(
       fun(X, N) ->
-              spawn(fun() ->
-                            Parent ! {pmap, N, F(X)}
-                    end),
+              spawn_link(fun() ->
+                                 Parent ! {pmap, N, F(X)}
+                         end),
               N+1
       end, 0, L),
     L2 = [receive {pmap, N, R} -> {N,R} end || _ <- L],
-    {_, L3} = lists:unzip(lists:keysort(1, L2)),
-    L3.
+    L3 = lists:keysort(1, L2),
+    [R || {_,R} <- L3].
 
 -record(pmap_acc,{
                   mapper,
@@ -397,6 +404,34 @@ pmap_collect_rest(Pending, Done) ->
     end.
 
 
+%% @doc Wraps an rpc:call/4 in a try/catch to handle the case where the
+%%      'rex' process is not running on the remote node. This is safe in
+%%      the sense that it won't crash the calling process if the rex
+%%      process is down.
+-spec safe_rpc(Node :: node(), Module :: atom(), Function :: atom(), Args :: [any()]) -> {'badrpc', any()} | any().
+safe_rpc(Node, Module, Function, Args) ->
+    try rpc:call(Node, Module, Function, Args) of
+        Result ->
+            Result
+    catch
+        exit:{noproc, _NoProcDetails} ->
+            {badrpc, rpc_process_down}
+    end.
+
+%% @doc Wraps an rpc:call/5 in a try/catch to handle the case where the
+%%      'rex' process is not running on the remote node. This is safe in
+%%      the sense that it won't crash the calling process if the rex
+%%      process is down.
+-spec safe_rpc(Node :: node(), Module :: atom(), Function :: atom(), Args :: [any()], Timeout :: timeout()) -> {'badrpc', any()} | any().
+safe_rpc(Node, Module, Function, Args, Timeout) ->
+    try rpc:call(Node, Module, Function, Args, Timeout) of
+        Result ->
+            Result
+    catch
+        'EXIT':{noproc, _NoProcDetails} ->
+            {badrpc, rpc_process_down}
+    end.
+
 %% @spec rpc_every_member(atom(), atom(), [term()], integer()|infinity)
 %%          -> {Results::[term()], BadNodes::[node()]}
 %% @doc Make an RPC call to the given module and function on each
@@ -426,7 +461,7 @@ multi_rpc(Nodes, Mod, Fun, Args) ->
 -spec multi_rpc([node()], module(), atom(), [any()], timeout()) -> [any()].
 multi_rpc(Nodes, Mod, Fun, Args, Timeout) ->
     pmap(fun(Node) ->
-                 rpc:call(Node, Mod, Fun, Args, Timeout)
+                 safe_rpc(Node, Mod, Fun, Args, Timeout)
          end, Nodes).
 
 %% @doc Perform an RPC call to a list of nodes in parallel, returning the
@@ -483,7 +518,7 @@ multicall_ann(Nodes, Mod, Fun, Args, Timeout) ->
                 -> orddict:orddict().
 build_tree(N, Nodes, Opts) ->
     case lists:member(cycles, Opts) of
-        true -> 
+        true ->
             Expand = lists:flatten(lists:duplicate(N+1, Nodes));
         false ->
             Expand = Nodes
@@ -586,6 +621,23 @@ make_newest_fold_req(#riak_core_fold_req_v1{foldfun=FoldFun, acc0=Acc0}) ->
 make_newest_fold_req(?FOLD_REQ{} = F) ->
     F.
 
+%% @doc Spawn an intermediate proxy process to handle errors during gen_xxx
+%%      calls.
+proxy_spawn(Fun) ->
+    %% Note: using spawn_monitor does not trigger selective receive
+    %%       optimization, but spawn + monitor does. Silly Erlang.
+    Pid = spawn(?MODULE, proxy, [self(), Fun]),
+    MRef = monitor(process, Pid),
+    Pid ! {proxy, MRef},
+    receive
+        {proxy_reply, MRef, Result} ->
+            demonitor(MRef, [flush]),
+            Result;
+        {'DOWN', MRef, _, _, Reason} ->
+            {error, Reason}
+    end.
+
+
 %% @private
 make_fold_reqv(v1, FoldFun, Acc0, _Forwardable, _Opts)
   when is_function(FoldFun, 3) ->
@@ -596,6 +648,17 @@ make_fold_reqv(v2, FoldFun, Acc0, Forwardable, Opts)
        andalso is_list(Opts) ->
     ?FOLD_REQ{foldfun=FoldFun, acc0=Acc0,
               forwardable=Forwardable, opts=Opts}.
+
+%% @private - used with proxy_spawn
+proxy(Parent, Fun) ->
+    _ = monitor(process, Parent),
+    receive
+        {proxy, MRef} ->
+            Result = Fun(),
+            Parent ! {proxy_reply, MRef, Result};
+        {'DOWN', _, _, _, _} ->
+            ok
+    end.
 
 %% ===================================================================
 %% Preflist utility functions
@@ -761,6 +824,39 @@ incr_counter(CounterPid) ->
 decr_counter(CounterPid) ->
     CounterPid ! down.
 
+pmap_test_() ->
+    Fgood = fun(X) -> 2 * X end,
+    Fbad = fun(3) -> throw(die_on_3);
+              (X) -> Fgood(X)
+           end,
+    Lin = [1,2,3,4],
+    Lout = [2,4,6,8],
+    {setup,
+     fun() -> error_logger:tty(false) end,
+     fun(_) -> error_logger:tty(true) end,
+     [fun() ->
+              % Test simple map case
+              ?assertEqual(Lout, pmap(Fgood, Lin)),
+              % Verify a crashing process will not stall pmap
+              Parent = self(),
+              Pid = spawn(fun() ->
+                                  % Caller trapping exits causes stall!!
+                                  % TODO: Consider pmapping in a spawned proc
+                                  % process_flag(trap_exit, true),
+                                  pmap(Fbad, Lin),
+                                  ?debugMsg("pmap finished just fine"),
+                                  Parent ! no_crash_yo
+                          end),
+              MonRef = monitor(process, Pid),
+              receive
+                  {'DOWN', MonRef, _, _, _} ->
+                      ok;
+                  no_crash_yo ->
+                      ?assert(pmap_did_not_crash_as_expected)
+              end
+      end
+     ]}.
+
 bounded_pmap_test_() ->
     Fun1 = fun(X) -> X+2 end,
     Tests =
@@ -845,6 +941,22 @@ make_fold_req_test_() ->
       end
      ]
     }.
+
+proxy_spawn_test() ->
+    A = proxy_spawn(fun() -> a end),
+    ?assertEqual(a, A),
+    B = proxy_spawn(fun() -> exit(killer_fun) end),
+    ?assertEqual({error, killer_fun}, B),
+
+    %% Ensure no errant 'DOWN' messages
+    receive
+        {'DOWN', _, _, _, _}=Msg ->
+            throw({error, {badmsg, Msg}});
+        _ ->
+            ok
+    after 1000 ->
+        ok
+    end.
 
 -endif.
 
