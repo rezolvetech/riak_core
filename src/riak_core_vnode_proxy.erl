@@ -275,7 +275,7 @@ handle_proxy(Msg, State=#state{check_counter=Counter,
                            check_request=RequestState2}}.
 
 handle_overload(Msg, #state{mod=Mod, index=Index}) ->
-    riak_core_stat:update(dropped_vnode_requests),
+    riak_core_stat:update(dropped_vnode_requests_total),
     case Msg of
         {'$gen_event', ?VNODE_REQ{sender=Sender, request=Request}} ->
             catch(Mod:handle_overload_command(Request, Sender, Index));
