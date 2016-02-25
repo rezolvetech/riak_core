@@ -404,3 +404,19 @@
     {datatype, {duration, ms}},
     hidden
 ]}.
+
+%% @doc Default database destination
+{mapping, "hashtree.backend", "riak_core.hashtree_backend",
+ [{default, rocksdb},
+  {datatype, {enum, [leveldb, rocksdb]}}]}.
+
+{translation,
+ "riak_core.hashtree_backend",
+ fun(Conf) ->
+         B = proplists:get_value(["hashtree", "backend"], Conf),
+         case B of
+             leveldb -> eleveldb;
+             rocksdb -> erocksdb
+         end
+ end
+}.
