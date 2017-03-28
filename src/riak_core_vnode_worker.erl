@@ -20,6 +20,8 @@
 
 -behaviour(gen_server).
 
+-include("riak_core_vnode.hrl").
+
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2,
         code_change/3]).
 -export([start_link/1, handle_work/3, handle_work/4]).
@@ -31,16 +33,18 @@
                                  {gen_server, pulse_gen_server}]}).
 -endif.
 
+-type mod_state() :: term().
+
 -record(state, {
         module :: atom(),
-        modstate :: any()
+        modstate :: mod_state()
     }).
 
--callback init_worker(pos_integer(), [term()], any()) ->
-    {ok, State::term()}.
--callback handle_work(Work::term(), From::pid(), State::term()) ->
-    {reply, Reply::term(), NewState::term()} |
-    {noreply, NewState::term()}.
+-callback init_worker(partition(), Args :: term(), Props :: [{atom(), term()}]) ->
+    {ok, mod_state()}.
+-callback handle_work(Work :: term(), sender(), mod_state()) ->
+    {reply, Reply :: term(), mod_state()} |
+    {noreply, mod_state()}.
 
 start_link(Args) ->
     WorkerMod = proplists:get_value(worker_callback_mod, Args),

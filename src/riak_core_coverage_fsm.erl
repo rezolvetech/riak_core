@@ -87,26 +87,34 @@
          terminate/3,
          code_change/4]).
 
+-type mod_state() :: term().
+-callback init(from(), RequestArgs :: [term()]) ->
+    {Request :: term(), vnode_selector(), NVal :: pos_integer(), primary_vnode_coverage(),
+     NodeCheckService :: module(), VNodeMaster :: atom(), timeout(), mod_state()}.
+-callback process_results(Results :: term(), mod_state()) ->
+    {ok, mod_state()} |
+    {done, mod_state()} |
+    {error, term()}.
+-callback finish(clean | {error, term()}, mod_state()) -> {stop, normal, mod_state()}.
 
 -define(DEFAULT_TIMEOUT, 60000*8).
 
 -type req_id() :: non_neg_integer().
 -type from() :: {atom(), req_id(), pid()}.
--type pvc() :: all | pos_integer().
--type request() :: tuple().
--type index() :: chash:index_as_int().
+-type vnode_selector() :: all | allup.
+-type primary_vnode_coverage() :: all | pos_integer().
 
 -record(state, {coverage_vnodes :: [{non_neg_integer(), node()}] | undefined,
                 mod :: atom(),
-                mod_state :: tuple(),
+                mod_state :: mod_state(),
                 n_val :: pos_integer(),
                 node_check_service :: module(),
                 %% `vnode_selector' can be any useful value for different
                 %% `riak_core' applications that define their own coverage
                 %% plan module
-                vnode_selector :: vnode_selector() | vnode_coverage() | term(),
-                pvc :: pvc(), % primary vnode coverage
-                request :: request(),
+                vnode_selector :: vnode_selector(),
+                pvc :: primary_vnode_coverage(),
+                request :: tuple(),
                 req_id :: req_id(),
                 required_responses=1 :: pos_integer(),
                 response_count=0 :: non_neg_integer(),
@@ -122,7 +130,7 @@
       Request :: request(),
       VNodeSelector:: vnode_selector(),
       NVal :: pos_integer(),
-      PrimaryVNodeCoverage :: pvc(),
+      PrimaryVNodeCoverage :: primary_vnode_coverage(),
       NodeCheckService :: module(),
       VNodeMaster :: atom(),
       Timeout :: pos_integer(),
