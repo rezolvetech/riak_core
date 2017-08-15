@@ -249,10 +249,6 @@ eqc_check(File, Prop) ->
     CE = binary_to_term(Bytes),
     eqc:check(Prop, CE).
 
-prop_claim_test_() ->
-    Props = [{N, eqc:testing_time(10+N, ?QC_OUT(prop_claim(with_ring_size(N))))} || N <- lists:seq(4, 9)],
-    [{timeout, 120, fun() -> ?assert(eqc:quickcheck(Prop)) end} || {_N, Prop} <- Props].
-
 %% Helpers
 transfer_ring(Ring) ->
     Owners = riak_core_ring:all_owners(Ring),
