@@ -382,12 +382,13 @@ normalise_delta(Delta) ->
 -spec rebalance_deltas([{node(), integer()}], pos_integer(), pos_integer()) -> [{node(), integer()}].
 rebalance_deltas(NodeDeltas, Max, RingSize) ->
     AppliedDeltas = [Own + Delta || {_, Own, Delta} <- NodeDeltas],
-     case lists:sum(AppliedDeltas) - RingSize of
-         0 ->
-             [{Node, Delta} || {Node, _Cnt, Delta} <- NodeDeltas];
-         N when N < 0 ->
-             increase_keeps(NodeDeltas, N, Max, [])
-     end.
+
+    case lists:sum(AppliedDeltas) - RingSize of
+        0 ->
+            [{Node, Delta} || {Node, _Cnt, Delta} <- NodeDeltas];
+        N when N < 0 ->
+            increase_keeps(NodeDeltas, N, Max, [])
+    end.
 
 %% @private increases the delta for (some) nodes giving away
 %% partitions to the max they can keep
@@ -399,7 +400,6 @@ rebalance_deltas(NodeDeltas, Max, RingSize) ->
 increase_keeps(Rest, 0, _Max, Acc) ->
     [{Node, Delta} || {Node, _Own, Delta} <- lists:usort(lists:append(Rest, Acc))];
 increase_keeps([], N, Max, Acc) when N < 0 ->
-    %% go around again
     increase_takes(lists:reverse(Acc), N, Max, []);
 increase_keeps([{Node, Own, Delta} | Rest], N, Max, Acc) when Delta < 0 ->
     WouldOwn = Own + Delta,
@@ -420,9 +420,8 @@ increase_keeps([NodeDelta | Rest], N, Max, Acc) ->
                              Rebalanced::[{node(), integer()}].
 increase_takes(Rest, 0, _Max, Acc) ->
     [{Node, Delta} || {Node, _Own, Delta} <- lists:usort(lists:append(Rest, Acc))];
-increase_takes([], N, Max, Acc) when N < 0 ->
-    %% go around again
-    increase_keeps(lists:reverse(Acc), N, Max, []);
+increase_takes([], N, _Max, Acc) when N < 0 ->
+    [{Node, Delta} || {Node, _Own, Delta} <- lists:usort(Acc)];
 increase_takes([{Node, Own, Delta} | Rest], N, Max, Acc) when Delta > 0 ->
     WouldOwn = Own + Delta,
     Additive = case WouldOwn +1 =< Max of
