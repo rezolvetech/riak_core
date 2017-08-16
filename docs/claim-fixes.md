@@ -1,4 +1,4 @@
-# The Ring
+# Claim Fixes
 
 This post is about two bug fixes to [riak-core's]() claim code.
 
