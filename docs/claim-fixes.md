@@ -25,7 +25,7 @@ to decide where to store replicas of data. An integer (2^160)
 represents the entire key space, (this means there is an actual limit
 on the number of keys you can store, but not one you'll see in
 practice.) The key space is divided into a number of ranges of equal
-size. The number of ranges is configured as the the _ring size_ for a
+size. The number of ranges is configured as the _ring size_ for a
 cluster, and the ring size is always a power of two. If the ring size
 is 64, then there will be 64 equal sized _partitions_ of the key space
 (and so on for ring sizes of 8, 16, 32, 128, 512 etc.)
@@ -94,11 +94,11 @@ Fallback will start a vnode process for the primary partition it
 temporarily replaces and store a replica until such a time as the
 primary is contactable.
 
-Thinking about a key that hashes into the one of the last two
-partitions should clarify why the ring is called a ring. A key that
-hashes into the last partition would have a preflist made up of that
-last partition, followed by the first, and then the second, wrapping
-around the tail of the ring and back to the start.
+Thinking about a key that hashes into one of the last two partitions
+should clarify why the ring is called a ring. A key that hashes into
+the last partition would have a preflist made up of that last
+partition, followed by the first, and then the second partitions,
+wrapping around the tail of the ring and back to the start.
 
 We want at least `n` nodes in the ring if we want each replica to be
 on it's own node. If we want to tolerate failures and still have each
@@ -142,7 +142,7 @@ difference should be minimal.
 
 One issue with Claim as it stands today is that it does not address
 "tail violations." For example, given a ring size of 16 with 5 nodes
-added at once claim generates a ring where there a primary preflists
+added at once claim generates a ring where there are primary preflists
 that do not have three distinct nodes. Claim assigns to each node in
 order, partition one (`p1`) to node one (`n1`), `p2` to `n2`, `p3` to
 `n3`, `p4` to `n4`, `p5` to `n5`, `p6` to `n1` and so on, finishing
@@ -197,21 +197,22 @@ as illustration.
 
 ### Balanced Rings
 
-If we had 4 nodes and a ring of size 32 and a nicely balanced ring
+If we have 4 nodes and a ring of size 32 and a nicely balanced ring
 where each node has 8 vnodes, and no tail violations but then add a
 5th node, what happens? Claim takes the existing ring and adds the
 `n5` to it. It calculates how many vnodes each node wants (6, since we
 can't have a fraction of a vnode) and how many each existing node can
 give up (2 each). It then decides on what the delta for each node
-is. Nodes 1 through 5 have a delta of 2 which means they can give up
+is. Nodes 1 through 4 have a delta of 2 which means they can give up
 at most 2 vnodes. Node 5 has a delta of -6, meaning it wants 6
 vnodes. Claim then takes vnodes from the existing nodes and assigns
 them to the new node in such a way that `target-n-val`is not
-violated. The bug means that claim takes 2 from node 1, 2 from node 2,
-2 from node 3 and then stops. Now node 5 has all 6 wants met, and
-nodes 1 through 3 have 6 nodes, all good. Except that node 4 has 8
-vnodes, 33.3% more than any other vnode. Node 4 is going to be busy,
-and therefore slow, and therefore trouble.
+violated. The bug is that claim takes all deltas from each node until
+wants are satisfied. It takes 2 from node1, 2 from node2, 2 from node3
+and then stops. Now node5 has all 6 wants met, and nodes 1 through 3
+have 6 vnodes each, all good. Except that node4 has 8 vnodes, 33.3%
+more than any other vnode. Node4 is going to be busy, and therefore
+slow, and thusly trouble.
 
 ![Unbalanced Ring](unbalanced.png "Unbalanced Ring")
 
@@ -226,14 +227,14 @@ where two nodes have 7 vnodes and the rest have 6.
 
 As well as fixing the two issues above and adding extra quickcheck
 property tests to verify the fixes, there is work to be done. The
-existing tests don't call the same code paths of the operator commands
+existing tests don't call the same code paths as the operator commands
 `riak-admin cluster join | plan | remove | etc` which means there may
 well be edges undetected and code untested. There is no test for
 removing a node. To address this we've started work on a more thorough
-quickcheck statem test that models the full life cycle of the ring over
-many transitions of node adds and removes. However the ring, claim,
-and gossip code seems to have grown organically and is spread over a
-large surface in riak_core. This work will take some more time.
+quickcheck statem test that models the full life cycle of the ring
+over many transitions of node adds and removes. However the ring,
+claim, and gossip code seems to have grown organically and is spread
+over a large surface in riak_core. This work will take some more time.
 
 # Conclusion
 
