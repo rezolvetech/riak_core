@@ -52,9 +52,8 @@ name. It says:
     "node1@host.domain owns partition
         1415829711164312202009819681693899175291684651008"
 
-Roughly speaking each physical node should own between 4 and 10
-partitions. For each partition that it owns, a node will start a
-process. These processes are called _vnodes_ for virtual node.
+For each partition that it owns, a node will start a process. These
+processes are called _vnodes_ for virtual node.
 
 ### A Routing Table
 
@@ -125,7 +124,7 @@ tolerate the failure of any node and still have every preflist contain
 three distinct nodes. This spacing is called `target-n-val` and by
 default it is set to four.
 
-#### balance
+#### Balance
 
 Since the vnode processes are the actors that do the work of reading
 and writing data, it would be best if the same number of processes ran
