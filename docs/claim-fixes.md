@@ -22,13 +22,12 @@ that describes a mapping of ownership as a routing table.
 Riak uses
 [consistent hashing](https://en.wikipedia.org/wiki/Consistent_hashing)
 to decide where to store replicas of data. An integer (2^160)
-represents the entire key space, (this means there is an actual limit
-on the number of keys you can store, but not one you'll see in
-practice.) The key space is divided into a number of ranges of equal
-size. The number of ranges is configured as the _ring size_ for a
-cluster, and the ring size is always a power of two. If the ring size
-is 64, then there will be 64 equal sized _partitions_ of the key space
-(and so on for ring sizes of 8, 16, 32, 128, 512 etc.)
+represents the entire key space. The key space is divided into a
+number of ranges of equal size. The number of ranges is configured as
+the _ring size_ for a cluster, and the ring size is always a power of
+two. If the ring size is 64, then there will be 64 equal sized
+_partitions_ of the key space (and so on for ring sizes of 8, 16, 32,
+128, 512 etc.)
 
 A hash function is used to turn any key into an integer in the key
 space (i.e. `hash({"artist", "REM"}) ->
