@@ -1,21 +1,25 @@
-# Claim Fixes
+# Riak Core Claim Fixes
 
-This post is about two bug fixes to [riak-core's]() claim code.
+This post is about two bug fixes to
+[riak-core's](https://github.com/basho/riak_core) claim code.
 
 The post will cover the purpose of claim, the inputs, and the desired
 properties of the output. Then a look at the bugs themselves, and how
 we've fixed them.
 
 First though, a quick look at the ring. Those of you who are confident
-about the ring, what it is, and how it does it, skip down to [Recent Work]
+about the ring, what it is, and how it does it, skip down to
+[Recent Work](#recent work)
 
 ## Abstract and Concrete
 
-As Martin Sumner recently wrote in an in depth look at
-[claim in Riak](), the ring is something often illustrated, a useful
-metaphor, and typically a vaguely grasped abstraction. But the ring is
-not just conceptual, it's a concrete thing in Riak: a datastructure
-that describes a mapping of ownership as a routing table.
+As [Martin Sumner](https://twitter.com/masleeds) recently wrote in an
+in depth look at
+[claim in Riak](https://github.com/infinityworks/riak_core/blob/mas-claimv2issues/docs/ring_claim.md),
+the ring is something often illustrated, a useful metaphor, and
+typically a vaguely grasped abstraction. But the ring is not just
+conceptual, it's a concrete thing in Riak: a datastructure that
+describes a mapping of ownership as a routing table.
 
 ### The Key Space
 
@@ -152,11 +156,12 @@ distinct physical replicas of your data but in fact there may only be
 2, and as such is an important bug to fix.
 
 This bug was found by modifying the [quickcheck]() tests to add
-multiple nodes to a cluster at once, and fixed by [Ramen Sen]() of NHS
-Digital. The fix firstly decides if there are tail violations (if the
-`ring size rem node count` is greater than zero but less than
-`target-n-val`) and if they can be solved given the number of nodes,
-target-n-val, and ring size.
+multiple nodes to a cluster at once, and fixed by
+[Ramen Sen](https://github.com/ramensen) of NHS Digital. The fix
+firstly decides if there are tail violations (if the `ring size rem
+node count` is greater than zero but less than `target-n-val`) and if
+they can be solved given the number of nodes, target-n-val, and ring
+size.
 
 Think of the ring as a set of sequences, where a sequence is:
 
@@ -239,7 +244,7 @@ over a large surface in riak_core. This work will take some more time.
 These changes, though small, make claim safer and lead to better
 behaved clusters. Though the tail violation issue could be detected if
 a diligent operator followed
-[best practices](http://docs.basho.com/riak/kv/2.2.3/setup/upgrading/checklist/#confirming-configuration-with-riaknostic)
+[best practices](https://www.tiot.jp/riak-docs/riak/kv/latest/setup/upgrading/checklist/#confirming-configuration-with-riaknostic)
 and checked the output of the ring before moving to production, there
 was no way to mitigate the issues.
 
