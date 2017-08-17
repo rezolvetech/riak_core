@@ -155,7 +155,7 @@ the ring. This can lead to dataloss if you expect there to be 3
 distinct physical replicas of your data but in fact there may only be
 2, and as such is an important bug to fix.
 
-This bug was found by modifying the [quickcheck]() tests to add
+This bug was found by modifying the [quickcheck](http://www.quviq.com/products/) tests to add
 multiple nodes to a cluster at once, and fixed by
 [Ramen Sen](https://github.com/ramensen) of NHS Digital. The fix
 firstly decides if there are tail violations (if the `ring size rem
