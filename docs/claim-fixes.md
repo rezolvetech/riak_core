@@ -9,7 +9,7 @@ we've fixed them.
 
 First though, a quick look at the ring. Those of you who are confident
 about the ring, what it is, and how it does it, skip down to
-[Recent Work](#recent work)
+[Recent Work](#recent-work)
 
 ## Abstract and Concrete
 
